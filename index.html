@@ -152,6 +152,8 @@
                 // Only focus input elements if they're the target
                 if (element.tagName === 'INPUT' && (col === COLS.SET || col === COLS.LABEL)) {
                     element.focus();
+                    // Select all text so next digit replaces current value
+                    element.select();
                 }
             }
         }
@@ -246,11 +248,26 @@
                 inp.min = '0'; inp.max = '255';
                 inpTd.appendChild(inp);
 
-                inp.onchange = () => {
-                    const v = parseInt(inp.value);
-                    if (!isNaN(v) && v >= 0 && v <= 255) ws.send(JSON.stringify({type:'write',index:i,value:v}));
+                inp.onblur = () => {
+                    let v = parseInt(inp.value);
+                    if (isNaN(v)) v = 0;
+                    v = Math.max(0, Math.min(255, v)); // clamp 0-255
+                    inp.value = v;
+                    ws.send(JSON.stringify({type:'write',index:i,value:v}));
                 };
                 inp.onfocus = () => { currentRow=i; currentCol=COLS.SET; };
+                inp.onkeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        let v = parseInt(inp.value);
+                        if (isNaN(v)) v = 0;
+                        v = Math.max(0, Math.min(255, v));
+                        inp.value = v;
+                        ws.send(JSON.stringify({type:'write',index:i,value:v}));
+                        // Keep focus and select all so next typing replaces the value
+                        inp.select();
+                    }
+                };
 
                 // bits
                 for (let bit=0; bit<8; bit++) {
@@ -266,8 +283,15 @@
                 const labTd = row.insertCell();
                 const labInp = document.createElement('input');
                 labInp.type='text'; labInp.id=`label-${i}`; labInp.className='label-input';
-                labInp.onchange=()=>ws.send(JSON.stringify({type:'label',index:i,label:labInp.value}));
+                labInp.onblur=()=>ws.send(JSON.stringify({type:'label',index:i,label:labInp.value}));
                 labInp.onfocus=()=>{currentRow=i; currentCol=COLS.LABEL;};
+                labInp.onkeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        ws.send(JSON.stringify({type:'label',index:i,label:labInp.value}));
+                        labInp.select();
+                    }
+                };
                 labTd.appendChild(labInp);
             }
             tableInitialized = true;
