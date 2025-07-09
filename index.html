@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ISY-GLT Merker Monitor</title>
+    <meta charset="utf-8" />
+    <style>
+        body { font-family: monospace; margin: 20px; }
+        table { border-collapse: collapse; table-layout: fixed; width: auto; }
+        td, th { border: 1px solid #ccc; padding: 4px 8px; text-align: center; }
+        th { background: #f0f0f0; font-weight: bold; }
+        .byte { font-weight: bold; background: #f8f8f8; cursor: pointer; }
+        .byte:hover { background: #e0e0e0; }
+        .bit { cursor: pointer; min-width: 30px; width: 30px; }
+        .bit:hover { background: #e0e0e0; }
+        .bit-1 { background: #90EE90; }
+        .bit-0 { background: #FFE4E1; }
+        .addr { font-weight: bold; background: #f0f0f0; width: 60px; }
+        .hex-col { width: 60px; }
+        .dec-col { width: 50px; }
+        .set-col { width: 60px; }
+        .label-col { width: 200px; }
+        .status { margin: 10px 0; padding: 5px; background: #f0f0f0; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+        .decimal-input {
+            width: 50px;
+            text-align: center;
+            border: 1px solid #ccc;
+            padding: 2px;
+            font-family: monospace;
+        }
+        .decimal-input:focus {
+            outline: 2px solid #4CAF50;
+            outline-offset: -1px;
+        }
+        .decimal-value {
+            font-weight: bold;
+            min-width: 30px;
+            display: inline-block;
+        }
+        .bit-header {
+            font-size: 14px;
+            min-width: 30px;
+            width: 30px;
+            background: #e8e8e8;
+            font-weight: normal;
+        }
+        .bit-subheader th {
+            border-top: none;
+            padding-top: 0;
+            font-size: 14px;
+            font-weight: normal;
+            background: #f8f8f8;
+        }
+        .focused-cell {
+            outline: 2px solid #4CAF50 !important;
+            outline-offset: -1px !important;
+        }
+        .label-input {
+            width: 95%;
+            border: 1px solid #ccc;
+            padding: 2px 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        /* Excel-like highlight for active row/column headers */
+        .highlight-header { background: #D0E4FF !important; }
+    </style>
+</head>
+<body>
+    <h1>ISY-GLT Merker Monitor</h1>
+    <div class="status">
+        WebSocket: <span id="ws-status" class="disconnected">Disconnected</span>
+        <button id="reset-btn" style="margin-left:20px;">Reset All</button>
+    </div>
+    <div style="margin: 10px 0; font-size: 12px; color: #666;">
+        <b>Bit control:</b> Left-click = momentary invert (hold to toggle temporarily), Right-click = permanent toggle<br>
+        <b>Keyboard:</b> Arrow keys = navigate, Space = toggle bit, Enter = strobe bit (hold), Tab = next cell, Esc = exit input
+    </div>
+    <table id="data">
+        <tr>
+            <th id="col-ADDR" class="addr">Addr</th>
+            <th id="col-HEX" class="hex-col">Hex</th>
+            <th id="col-DEC" class="dec-col">Dec</th>
+            <th id="col-SET" class="set-col">Set</th>
+            <th id="col-BIT0" class="bit-header">.1</th>
+            <th id="col-BIT1" class="bit-header">.2</th>
+            <th id="col-BIT2" class="bit-header">.3</th>
+            <th id="col-BIT3" class="bit-header">.4</th>
+            <th id="col-BIT4" class="bit-header">.5</th>
+            <th id="col-BIT5" class="bit-header">.6</th>
+            <th id="col-BIT6" class="bit-header">.7</th>
+            <th id="col-BIT7" class="bit-header">.8</th>
+            <th id="col-LABEL" class="label-col">Label</th>
+        </tr>
+        <!-- bit-subheader row removed; headers included above -->
+    </table>
+
+    <script>
+        let ws = null;
+        let currentData = [];
+        let tableInitialized = false;
+        let focusedCell = null;
+
+        // Navigation state
+        let currentRow = 0;
+        let currentCol = 0;
+        const COLS = {
+            HEX: 0,
+            DEC: 1,
+            SET: 2,
+            BIT0: 3, // .1
+            BIT1: 4, // .2
+            BIT2: 5, // .3
+            BIT3: 6, // .4
+            BIT4: 7, // .5
+            BIT5: 8, // .6
+            BIT6: 9, // .7
+            BIT7: 10, // .8
+            LABEL: 11
+        };
+
+        function getCellElement(row, col) {
+            if (col === COLS.SET) {
+                return document.getElementById(`input-${row}`);
+            } else if (col >= COLS.BIT0 && col <= COLS.BIT7) {
+                const bit = col - COLS.BIT0;
+                return document.getElementById(`bit-${row}-${bit}`);
+            } else if (col === COLS.LABEL) {
+                return document.getElementById(`label-${row}`);
+            }
+            return null;
+        }
+
+        function setFocus(row, col) {
+            // Remove previous focus styling
+            document.querySelectorAll('.focused-cell').forEach(el => el.classList.remove('focused-cell'));
+            document.querySelectorAll('.highlight-header').forEach(el => el.classList.remove('highlight-header'));
+
+            currentRow = Math.max(0, Math.min(255, row));
+            currentCol = Math.max(COLS.SET, Math.min(COLS.LABEL, col));
+
+            const element = getCellElement(currentRow, currentCol);
+            if (element) {
+                focusedCell = element;
+                element.classList.add('focused-cell');
+                element.scrollIntoView({ block: 'nearest' });
+
+                // Update header highlights
+                highlightHeaders();
+
+                // Only focus input elements if they're the target
+                if (element.tagName === 'INPUT' && (col === COLS.SET || col === COLS.LABEL)) {
+                    element.focus();
+                }
+            }
+        }
+
+        function highlightHeaders() {
+            // Clear any existing highlights
+            document.querySelectorAll('.highlight-header').forEach(el => el.classList.remove('highlight-header'));
+
+            // Row header (addr cell)
+            const addrHeader = document.getElementById(`addr-${currentRow}`);
+            if (addrHeader) addrHeader.classList.add('highlight-header');
+
+            const colMap = {
+                [COLS.HEX]: 'col-HEX',
+                [COLS.DEC]: 'col-DEC',
+                [COLS.SET]: 'col-SET',
+                [COLS.LABEL]: 'col-LABEL',
+                [COLS.BIT0]: 'col-BIT0',
+                [COLS.BIT1]: 'col-BIT1',
+                [COLS.BIT2]: 'col-BIT2',
+                [COLS.BIT3]: 'col-BIT3',
+                [COLS.BIT4]: 'col-BIT4',
+                [COLS.BIT5]: 'col-BIT5',
+                [COLS.BIT6]: 'col-BIT6',
+                [COLS.BIT7]: 'col-BIT7'
+            };
+            const hdr = document.getElementById(colMap[currentCol]);
+            if (hdr) hdr.classList.add('highlight-header');
+        }
+
+        // Global keyboard handler (same as original)
+        document.addEventListener('keydown', (e) => {
+            const activeElement = document.activeElement;
+            const isInputActive = activeElement && activeElement.tagName === 'INPUT';
+
+            const arrow = {
+                ArrowUp: [-1, 0],
+                ArrowDown: [1, 0],
+                ArrowLeft: [0, -1],
+                ArrowRight: [0, 1]
+            }[e.key];
+            if (arrow) {
+                e.preventDefault();
+                if (isInputActive) activeElement.blur();
+                let [dr, dc] = arrow;
+                setFocus(currentRow + dr, currentCol + dc);
+                return;
+            }
+
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                if (isInputActive) activeElement.blur();
+                const dir = e.shiftKey ? -1 : 1;
+                let nextCol = currentCol + dir;
+                let nextRow = currentRow;
+                if (nextCol < COLS.SET) { nextCol = COLS.LABEL; nextRow--; }
+                if (nextCol > COLS.LABEL) { nextCol = COLS.SET; nextRow++; }
+                setFocus(nextRow, nextCol);
+            } else if (e.key === 'Escape' && isInputActive) {
+                e.preventDefault();
+                activeElement.blur();
+            } else if (currentCol >= COLS.BIT0 && currentCol <= COLS.BIT7) {
+                const bit = currentCol - COLS.BIT0;
+                if (e.key === ' ' && !isInputActive) {
+                    e.preventDefault();
+                    toggleBit(currentRow, bit);
+                }
+            }
+        });
+
+        function initTable() {
+            const table = document.getElementById('data');
+            while (table.rows.length > 1) table.deleteRow(1);
+
+            for (let i = 0; i < 256; i++) {
+                const row = table.insertRow();
+                const addrCell = row.insertCell();
+                addrCell.className = 'addr';
+                addrCell.id = `addr-${i}`;
+                addrCell.textContent = `NE${i}`;
+                row.insertCell().id = `hex-${i}`;
+                row.cells[1].className = 'byte hex-col';
+                row.insertCell().id = `dec-${i}`;
+                row.cells[2].className = 'dec-col';
+
+                // input
+                const inpTd = row.insertCell();
+                const inp = document.createElement('input');
+                inp.type = 'number';
+                inp.id = `input-${i}`;
+                inp.className = 'decimal-input';
+                inp.min = '0'; inp.max = '255';
+                inpTd.appendChild(inp);
+
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (!isNaN(v) && v >= 0 && v <= 255) ws.send(JSON.stringify({type:'write',index:i,value:v}));
+                };
+                inp.onfocus = () => { currentRow=i; currentCol=COLS.SET; };
+
+                // bits
+                for (let bit=0; bit<8; bit++) {
+                    const bTd = row.insertCell();
+                    bTd.id = `bit-${i}-${bit}`;
+                    bTd.className = 'bit';
+                    bTd.title = `NE${i}.${bit+1}`;
+                    bTd.onclick = () => { currentRow=i; currentCol=COLS.BIT0+bit; setFocus(i,COLS.BIT0+bit);} ;
+                    bTd.oncontextmenu = (e)=>{e.preventDefault();toggleBit(i,bit);};
+                }
+
+                // label
+                const labTd = row.insertCell();
+                const labInp = document.createElement('input');
+                labInp.type='text'; labInp.id=`label-${i}`; labInp.className='label-input';
+                labInp.onchange=()=>ws.send(JSON.stringify({type:'label',index:i,label:labInp.value}));
+                labInp.onfocus=()=>{currentRow=i; currentCol=COLS.LABEL;};
+                labTd.appendChild(labInp);
+            }
+            tableInitialized = true;
+            setFocus(0,COLS.SET);
+        }
+
+        function updateTable(data){
+            currentData=data;
+            if(!tableInitialized) initTable();
+            for(let i=0;i<data.length;i++){
+                document.getElementById(`hex-${i}`).textContent=`0x${data[i].toString(16).padStart(2,'0').toUpperCase()}`;
+                document.getElementById(`dec-${i}`).innerHTML=`<span class='decimal-value'>${data[i]}</span>`;
+                const inp=document.getElementById(`input-${i}`);
+                if(document.activeElement!==inp) inp.value=data[i];
+                for(let b=0;b<8;b++){
+                    const cell=document.getElementById(`bit-${i}-${b}`);
+                    const val=(data[i]>>b)&1;
+                    cell.className=`bit bit-${val}`;
+                    cell.textContent=val;
+                }
+            }
+            // Restore focus indicator & headers
+            if (focusedCell) {
+                const elementToFocus = focusedCell;
+                if (elementToFocus) {
+                    elementToFocus.classList.add('focused-cell');
+                }
+            }
+
+            highlightHeaders();
+        }
+
+        function updateLabels(labels){
+            for(const [idx,label] of Object.entries(labels)){
+                const inp=document.getElementById(`label-${idx}`);
+                if(inp && document.activeElement!==inp) inp.value=label;
+            }
+        }
+
+        function toggleBit(byteIdx,bitIdx){
+            const v=currentData[byteIdx]^ (1<<bitIdx);
+            ws.send(JSON.stringify({type:'write',index:byteIdx,value:v}));
+        }
+
+        function connect(){
+            ws=new WebSocket('ws://'+location.hostname+':8001/');
+            ws.onopen=()=>{document.getElementById('ws-status').textContent='Connected';document.getElementById('ws-status').className='connected';};
+            ws.onmessage=e=>{const m=JSON.parse(e.data); if(m.type==='state') updateTable(m.data); else if(m.type==='labels') updateLabels(m.data);} ;
+            ws.onclose=()=>{document.getElementById('ws-status').textContent='Disconnected';document.getElementById('ws-status').className='disconnected'; setTimeout(connect,2000);} ;
+        }
+
+        document.getElementById('reset-btn').onclick=()=>{ if(ws&&ws.readyState===1) ws.send(JSON.stringify({type:'reset'})); };
+
+        connect();
+    </script>
+</body>
+</html> 
