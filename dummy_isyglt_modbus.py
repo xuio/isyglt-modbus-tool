@@ -75,6 +75,47 @@ labels_lock = threading.Lock()
 STATE_FILE = "state.json"
 state_lock = threading.Lock()
 
+BIT_LABELS_FILE = "bit_labels.json"
+bit_labels: dict[str, str] = {}
+bit_labels_lock = threading.Lock()
+
+def _bit_key(byte: int, bit: int) -> str:
+    return f"{byte}_{bit}"
+
+def load_bit_labels():
+    global bit_labels
+    if os.path.exists(BIT_LABELS_FILE):
+        try:
+            with open(BIT_LABELS_FILE, 'r') as f:
+                bit_labels = json.load(f)
+            print(f"Loaded {len(bit_labels)} bit labels from {BIT_LABELS_FILE}")
+        except Exception as e:
+            print(f"Error loading bit labels: {e}")
+            bit_labels = {}
+    else:
+        bit_labels = {}
+
+def save_bit_labels():
+    try:
+        with bit_labels_lock:
+            with open(BIT_LABELS_FILE, 'w') as f:
+                json.dump(bit_labels, f, indent=2)
+    except Exception as e:
+        print(f"Error saving bit labels: {e}")
+
+async def broadcast_bitlabels():
+    with bit_labels_lock:
+        data = dict(bit_labels)
+    message = json.dumps({"type": "bitlabels", "data": data})
+    with ws_lock:
+        dead=set()
+        for c in ws_clients:
+            try:
+                await c.send(message)
+            except:
+                dead.add(c)
+        ws_clients.difference_update(dead)
+
 
 def load_labels():
     """Load labels from persistent storage."""
@@ -359,6 +400,9 @@ async def websocket_handler(websocket: Any, ne_mem: List[int]):
         with labels_lock:
             labels_data = dict(ne_labels)
         await websocket.send(json.dumps({"type": "labels", "data": labels_data}))
+        with bit_labels_lock:
+            bit_labels_copy=dict(bit_labels)
+        await websocket.send(json.dumps({"type": "bitlabels", "data": bit_labels_copy}))
         
         # Handle incoming messages
         async for message in websocket:
@@ -393,6 +437,18 @@ async def websocket_handler(websocket: Any, ne_mem: List[int]):
                         save_labels()
                         # Broadcast label update to all clients
                         await broadcast_labels()
+                elif data.get("type") == "bitlabel":
+                    byte_idx = int(data.get("byte", -1))
+                    bit_idx = int(data.get("bit", -1))
+                    label = data.get("label", "").strip()
+                    key=_bit_key(byte_idx, bit_idx)
+                    with bit_labels_lock:
+                        if label:
+                            bit_labels[key]=label
+                        else:
+                            bit_labels.pop(key, None)
+                    save_bit_labels()
+                    await broadcast_bitlabels()
                 elif data.get("type") == "reset":
                     with ne_lock:
                         for i in range(NE_SIZE):
@@ -556,6 +612,7 @@ def main():
 
     load_labels() # Load labels on startup
     load_state(ne_memory) # Load state on startup
+    load_bit_labels()
 
     start_monitor(ne_memory)
     

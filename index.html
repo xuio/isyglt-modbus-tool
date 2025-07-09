@@ -10,14 +10,13 @@
         th { background: #f0f0f0; font-weight: bold; }
         .byte { font-weight: bold; background: #f8f8f8; cursor: pointer; }
         .byte:hover { background: #e0e0e0; }
-        .bit { cursor: pointer; min-width: 30px; width: 30px; }
-        .bit:hover { background: #e0e0e0; }
+        .bit { cursor: pointer; min-width: 30px; width: 30px; position:relative; padding:0; height:36px; }
+        .bit .bit-label { position:absolute; bottom:2px; left:0; right:0; font-size:9px; line-height:9px; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
         .bit-1 { background: #90EE90; }
         .bit-0 { background: #FFE4E1; }
         .addr { font-weight: bold; background: #f0f0f0; width: 60px; }
         .hex-col { width: 60px; }
         .dec-col { width: 50px; }
-        .set-col { width: 60px; }
         .label-col { width: 200px; }
         .status { margin: 10px 0; padding: 5px; background: #f0f0f0; }
         .connected { color: green; }
@@ -65,6 +64,28 @@
         }
         /* Excel-like highlight for active row/column headers */
         .highlight-header { background: #D0E4FF !important; }
+
+        /* Dark mode support */
+        @media (prefers-color-scheme: dark) {
+            body { background: #1e1e1e; color: #e0e0e0; }
+            table, td, th { border-color: #555; }
+            th { background: #2d2d2d; }
+            .byte { background: #2a2a2a; }
+            .byte:hover { background: #3a3a3a; }
+            .bit:hover { background: #3a3a3a; }
+            .bit-1 { background: #2e7d32; }
+            .bit-0 { background: #aa3030; }
+            .bit .bit-label { color:#ccc; }
+            .addr { background: #2d2d2d; }
+            .status { background: #2d2d2d; }
+            .connected { color: #4caf50; }
+            .disconnected { color: #e04848; }
+            .decimal-input { background: #333; color: #e0e0e0; border-color: #555; }
+            .label-input { background: #333; color: #e0e0e0; border-color: #555; }
+            .bit-header { background: #2d2d2d; }
+            .focused-cell { outline-color: #4caf50 !important; }
+            .highlight-header { background: #294e80 !important; }
+        }
     </style>
 </head>
 <body>
@@ -74,15 +95,14 @@
         <button id="reset-btn" style="margin-left:20px;">Reset All</button>
     </div>
     <div style="margin: 10px 0; font-size: 12px; color: #666;">
-        <b>Bit control:</b> Left-click = momentary invert (hold to toggle temporarily), Right-click = permanent toggle<br>
-        <b>Keyboard:</b> Arrow keys = navigate, Space = toggle bit, Enter = strobe bit (hold), Tab = next cell, Esc = exit input
+        <b>Bit control:</b> Left-click = momentary strobe (hold), Shift+Left-click or Right-click = permanent toggle<br>
+        <b>Keyboard:</b> Arrow keys = navigate, Space = toggle, Enter = edit/commit, 1-8 = strobe bit, Shift+1-8 = toggle bit, <b>L</b> = label bit, Tab = next, Esc = exit
     </div>
     <table id="data">
         <tr>
             <th id="col-ADDR" class="addr">Addr</th>
             <th id="col-HEX" class="hex-col">Hex</th>
             <th id="col-DEC" class="dec-col">Dec</th>
-            <th id="col-SET" class="set-col">Set</th>
             <th id="col-BIT0" class="bit-header">.1</th>
             <th id="col-BIT1" class="bit-header">.2</th>
             <th id="col-BIT2" class="bit-header">.3</th>
@@ -107,21 +127,24 @@
         let currentCol = 0;
         const COLS = {
             HEX: 0,
-            DEC: 1,
-            SET: 2,
-            BIT0: 3, // .1
-            BIT1: 4, // .2
-            BIT2: 5, // .3
-            BIT3: 6, // .4
-            BIT4: 7, // .5
-            BIT5: 8, // .6
-            BIT6: 9, // .7
-            BIT7: 10, // .8
-            LABEL: 11
+            DEC: 1, // editable input
+            BIT0: 2,
+            BIT1: 3,
+            BIT2: 4,
+            BIT3: 5,
+            BIT4: 6,
+            BIT5: 7,
+            BIT6: 8,
+            BIT7: 9,
+            LABEL: 10
         };
 
+        // Track active key strobes (digit keys 1-8)
+        const activeKeyStrobes = {}; // key -> {byte, original}
+        const bitLabels = {};
+
         function getCellElement(row, col) {
-            if (col === COLS.SET) {
+            if (col === COLS.DEC) {
                 return document.getElementById(`input-${row}`);
             } else if (col >= COLS.BIT0 && col <= COLS.BIT7) {
                 const bit = col - COLS.BIT0;
@@ -138,7 +161,7 @@
             document.querySelectorAll('.highlight-header').forEach(el => el.classList.remove('highlight-header'));
 
             currentRow = Math.max(0, Math.min(255, row));
-            currentCol = Math.max(COLS.SET, Math.min(COLS.LABEL, col));
+            currentCol = Math.max(COLS.DEC, Math.min(COLS.LABEL, col));
 
             const element = getCellElement(currentRow, currentCol);
             if (element) {
@@ -150,7 +173,7 @@
                 highlightHeaders();
 
                 // Only focus input elements if they're the target
-                if (element.tagName === 'INPUT' && (col === COLS.SET || col === COLS.LABEL)) {
+                if (element.tagName === 'INPUT' && (col === COLS.DEC || col === COLS.LABEL)) {
                     element.focus();
                     // Select all text so next digit replaces current value
                     element.select();
@@ -168,8 +191,7 @@
 
             const colMap = {
                 [COLS.HEX]: 'col-HEX',
-                [COLS.DEC]: 'col-DEC',
-                [COLS.SET]: 'col-SET',
+                [COLS.DEC]: 'col-DEC', // DEC editable column
                 [COLS.LABEL]: 'col-LABEL',
                 [COLS.BIT0]: 'col-BIT0',
                 [COLS.BIT1]: 'col-BIT1',
@@ -209,8 +231,8 @@
                 const dir = e.shiftKey ? -1 : 1;
                 let nextCol = currentCol + dir;
                 let nextRow = currentRow;
-                if (nextCol < COLS.SET) { nextCol = COLS.LABEL; nextRow--; }
-                if (nextCol > COLS.LABEL) { nextCol = COLS.SET; nextRow++; }
+                if (nextCol < COLS.DEC) { nextCol = COLS.LABEL; nextRow--; }
+                if (nextCol > COLS.LABEL) { nextCol = COLS.DEC; nextRow++; }
                 setFocus(nextRow, nextCol);
             } else if (e.key === 'Escape' && isInputActive) {
                 e.preventDefault();
@@ -220,6 +242,38 @@
                 if (e.key === ' ' && !isInputActive) {
                     e.preventDefault();
                     toggleBit(currentRow, bit);
+                }
+            }
+
+            // Digit key strobes 1-8 when a bit cell is selected
+            if (!isInputActive && e.code.startsWith('Digit')) {
+                const digit = parseInt(e.code.substring(5)); // 'Digit1' -> 1
+                if (digit >= 1 && digit <= 8) {
+                    const bitIndex = digit - 1;
+                    const byteIdx = currentRow;
+                    if (e.shiftKey) {
+                        // Permanent toggle
+                        toggleBit(byteIdx, bitIndex);
+                    } else {
+                        if (!(digit in activeKeyStrobes)) {
+                            const original = currentData[byteIdx];
+                            const toggled = original ^ (1 << bitIndex);
+                            ws.send(JSON.stringify({type:'write',index:byteIdx,value:toggled}));
+                            activeKeyStrobes[digit] = {byte: byteIdx, original};
+                        }
+                    }
+                }
+            }
+        });
+
+        // Keyup handler for strobes
+        document.addEventListener('keyup', (e)=>{
+            if (e.code.startsWith('Digit')) {
+                const digit = parseInt(e.code.substring(5));
+                if (digit in activeKeyStrobes) {
+                    const {byte, original} = activeKeyStrobes[digit];
+                    ws.send(JSON.stringify({type: 'write', index: byte, value: original}));
+                    delete activeKeyStrobes[digit];
                 }
             }
         });
@@ -236,36 +290,33 @@
                 addrCell.textContent = `NE${i}`;
                 row.insertCell().id = `hex-${i}`;
                 row.cells[1].className = 'byte hex-col';
-                row.insertCell().id = `dec-${i}`;
-                row.cells[2].className = 'dec-col';
+                // Decimal value cell with input
+                const decCell = row.insertCell();
+                decCell.id = `dec-${i}`;
+                decCell.className = 'dec-col';
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.id = `input-${i}`;
+                input.className = 'decimal-input';
+                input.min = '0';
+                input.max = '255';
+                decCell.appendChild(input);
 
-                // input
-                const inpTd = row.insertCell();
-                const inp = document.createElement('input');
-                inp.type = 'number';
-                inp.id = `input-${i}`;
-                inp.className = 'decimal-input';
-                inp.min = '0'; inp.max = '255';
-                inpTd.appendChild(inp);
-
-                inp.onblur = () => {
-                    let v = parseInt(inp.value);
+                const sendValue = () => {
+                    let v = parseInt(input.value);
                     if (isNaN(v)) v = 0;
                     v = Math.max(0, Math.min(255, v)); // clamp 0-255
-                    inp.value = v;
+                    input.value = v;
                     ws.send(JSON.stringify({type:'write',index:i,value:v}));
                 };
-                inp.onfocus = () => { currentRow=i; currentCol=COLS.SET; };
-                inp.onkeydown = (e) => {
+                input.onblur = () => { sendValue(); };
+                input.onfocus = () => { currentRow=i; currentCol=COLS.DEC; };
+                input.onkeydown = (e) => {
                     if (e.key === 'Enter') {
                         e.preventDefault();
-                        let v = parseInt(inp.value);
-                        if (isNaN(v)) v = 0;
-                        v = Math.max(0, Math.min(255, v));
-                        inp.value = v;
-                        ws.send(JSON.stringify({type:'write',index:i,value:v}));
+                        sendValue();
                         // Keep focus and select all so next typing replaces the value
-                        inp.select();
+                        input.select();
                     }
                 };
 
@@ -276,7 +327,26 @@
                     bTd.className = 'bit';
                     bTd.title = `NE${i}.${bit+1}`;
                     bTd.onclick = () => { currentRow=i; currentCol=COLS.BIT0+bit; setFocus(i,COLS.BIT0+bit);} ;
-                    bTd.oncontextmenu = (e)=>{e.preventDefault();toggleBit(i,bit);};
+                    // Left-click momentary strobe (hold)
+                    bTd.onmousedown = (e) => {
+                        if (e.button !== 0 || e.shiftKey) return; // only pure left click
+                        e.preventDefault();
+                        const original = currentData[byteIndex];
+                        const toggled = original ^ (1 << bitIndex);
+                        ws.send(JSON.stringify({ type: 'write', index: byteIndex, value: toggled }));
+                        bTd.dataset.orig = original;
+                        const upHandler = (ev) => {
+                            if (ev.button === 0) {
+                                ws.send(JSON.stringify({ type: 'write', index: byteIndex, value: original }));
+                                document.removeEventListener('mouseup', upHandler);
+                            }
+                        };
+                        document.addEventListener('mouseup', upHandler);
+                    };
+
+                    // Shift+click or right-click → permanent toggle
+                    bTd.oncontextmenu = (e)=>{ e.preventDefault(); toggleBit(i,bit); };
+                    bTd.onclick = (e)=>{ if(e.shiftKey && e.button===0){ toggleBit(i,bit);} };
                 }
 
                 // label
@@ -295,7 +365,7 @@
                 labTd.appendChild(labInp);
             }
             tableInitialized = true;
-            setFocus(0,COLS.SET);
+            setFocus(0,COLS.DEC);
         }
 
         function updateTable(data){
@@ -303,9 +373,10 @@
             if(!tableInitialized) initTable();
             for(let i=0;i<data.length;i++){
                 document.getElementById(`hex-${i}`).textContent=`0x${data[i].toString(16).padStart(2,'0').toUpperCase()}`;
-                document.getElementById(`dec-${i}`).innerHTML=`<span class='decimal-value'>${data[i]}</span>`;
-                const inp=document.getElementById(`input-${i}`);
-                if(document.activeElement!==inp) inp.value=data[i];
+                const input = document.getElementById(`input-${i}`);
+                if (input && document.activeElement !== input) {
+                    input.value = data[i];
+                }
                 for(let b=0;b<8;b++){
                     const cell=document.getElementById(`bit-${i}-${b}`);
                     const val=(data[i]>>b)&1;
@@ -322,12 +393,30 @@
             }
 
             highlightHeaders();
+            updateBitLabels();
         }
 
         function updateLabels(labels){
             for(const [idx,label] of Object.entries(labels)){
                 const inp=document.getElementById(`label-${idx}`);
                 if(inp && document.activeElement!==inp) inp.value=label;
+            }
+        }
+
+        function updateBitLabels(){
+            // Clear all existing labels
+            document.querySelectorAll('.bit-label').forEach(el=>{el.textContent='';});
+
+            // Apply current labels
+            for(const key in bitLabels){
+                 const [b, bit] = key.split('_').map(Number);
+                 const lbl = bitLabels[key];
+                 const cell = document.getElementById(`bit-${b}-${bit}`);
+                 if(cell){
+                     let span = cell.querySelector('.bit-label');
+                     if(!span){ span=document.createElement('div'); span.className='bit-label'; cell.appendChild(span);} 
+                     span.textContent = lbl;
+                 }
             }
         }
 
@@ -339,13 +428,34 @@
         function connect(){
             ws=new WebSocket('ws://'+location.hostname+':8001/');
             ws.onopen=()=>{document.getElementById('ws-status').textContent='Connected';document.getElementById('ws-status').className='connected';};
-            ws.onmessage=e=>{const m=JSON.parse(e.data); if(m.type==='state') updateTable(m.data); else if(m.type==='labels') updateLabels(m.data);} ;
+            ws.onmessage=e=>{const m=JSON.parse(e.data); if(m.type==='state') updateTable(m.data); else if(m.type==='labels') updateLabels(m.data); else if (m.type === 'bitlabels') {
+                // Replace existing labels map so removed keys disappear
+                Object.keys(bitLabels).forEach(k => delete bitLabels[k]);
+                Object.assign(bitLabels, m.data);
+                updateBitLabels();
+            }};
             ws.onclose=()=>{document.getElementById('ws-status').textContent='Disconnected';document.getElementById('ws-status').className='disconnected'; setTimeout(connect,2000);} ;
         }
 
         document.getElementById('reset-btn').onclick=()=>{ if(ws&&ws.readyState===1) ws.send(JSON.stringify({type:'reset'})); };
 
         connect();
+
+        // key handler L when cell focused
+        document.addEventListener('keydown',(ev)=>{
+            if(ev.key.toLowerCase()==='l' && currentCol>=COLS.BIT0 && currentCol<=COLS.BIT7 && !ev.ctrlKey && !ev.metaKey && !ev.altKey){
+                ev.preventDefault();
+                const bitIdx=currentCol-COLS.BIT0;
+                const byteIdx=currentRow;
+                const key=_bitKey(byteIdx,bitIdx);
+                const currentLabel = bitLabels[key]||'';
+                const newLbl=prompt(`Label for NE${byteIdx}.${bitIdx+1}`, currentLabel);
+                if(newLbl!==null){
+                   ws.send(JSON.stringify({type:'bitlabel', byte:byteIdx, bit:bitIdx, label:newLbl}));
+                }
+            }
+        });
+        function _bitKey(b,bit){return `${b}_${bit}`;}
     </script>
 </body>
 </html> 
