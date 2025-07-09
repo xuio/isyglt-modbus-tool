@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+labels.json
+state.json
+isyglt-markdown/
+
+.DS_Store
+
+*.log
+
+# Virtual environments
+.venv
